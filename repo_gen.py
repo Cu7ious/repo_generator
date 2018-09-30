@@ -1,54 +1,87 @@
-import requests
+from glob import glob
 import lxml.html
-import sys
-import os
-import glob
+from os import environ, mkdir, chdir, chmod
+from requests import session
+from sys import argv, exit
+# custom module
 import repo_gen_utils as rgu
 
-login_url = 'https://intranet.hbtn.io/auth/sign_in'
-request_url = sys.argv[1]
+base_dir = environ['HOLB_DIR'] + '/'
+base_url = 'https://intranet.hbtn.io/'
+login_url = base_url + 'auth/sign_in'
 
-s = requests.session()          # start new session
-login = s.get(login_url)        # get html
-login_html = lxml.html.fromstring(login.text)  # reformat url into list
-hidden_inputs = login_html.xpath(r'//form//input[@type="hidden"]')  # get all necessary hidden inputs
-form = {x.attrib["name"]: x.attrib["value"] for x in hidden_inputs}  # put them into dictionary
+only_readme = False
+all_projects = False
 
-form['user[login]'] = os.environ['HOLB_USERNAME']  # username (make sure env variable is set)
-form['user[password]'] = os.environ['HOLB_PASS']  # password (make sure env variable is set)
-response = s.post(login_url, data=form)  # login to holberton intranet
+for item in argv:
+    if item == "--readme-only":
+        only_readme = True
+    if item == "--all":
+        all_projects = True
 
-page = s.get(request_url)  # now that we're logged in, get the url we really want
-root = lxml.html.fromstring(page.text)  # turn it into lxml html
+request_url = argv[1]
+
+# starts new session
+s = session()
+# gets the login page
+login = s.get(login_url)
+# reformats url into list
+login_html = lxml.html.fromstring(login.text)
+# gets all necessary hidden inputs
+hidden_inputs = login_html.xpath(r'//form//input[@type="hidden"]')
+# puts them into dictionary
+form = {x.attrib["name"]: x.attrib["value"] for x in hidden_inputs}
+
+# username (make sure env variable is set)
+form['user[login]'] = environ['HOLB_USERNAME']
+# password (make sure env variable is set)
+form['user[password]'] = environ['HOLB_PASS']
+# login to holberton intranet
+response = s.post(login_url, data=form)
+
+# @TODO: parse the response object and check if login was successful
+#        for that it is also make sense to check out s variable (session)
+
+# cleans up memory
+del login, login_html, hidden_inputs, form, response
+
+# if all_projects is True:
+# now that we're logged in, get the url we really want
+page = s.get(request_url)
+# turn it into lxml html
+root = lxml.html.fromstring(page.text)
 
 # find and make the directory:
 try:
-    directory = root.xpath("//ul/li[contains(., 'Directory:')]/code")[0].text.strip()
+    directory = base_dir + root.xpath("//ul/li[contains(., 'Directory:')]/code")[0].text.strip()
 except IndexError as e:
     # takes care of when it is a longterm project with just a Github repository field
-    directory = root.xpath("//ul/li[contains(., 'GitHub repository:')]/code")[0].text.strip()
+    try:
+        directory = base_dir + root.xpath("//ul/li[contains(., 'GitHub repository:')]/code")[0].text.strip()
+    except:
+    # this means that the project has a non-standard structure or yor credentials are incorrect.
+        print("[ERROR]: Something went wrong. Please report this by creating the issue")
+        exit(1)
 
 try:
-    os.mkdir(directory)
+    mkdir(directory)
 except FileExistsError as e:
     print("[WARNING]: Directory already exists. Aborting program to avoid accidentally overwriting your work.")
-    sys.exit()
+    exit(2)
 
 # change to directory
-os.chdir(directory)
+chdir(directory)
 
-# find and make all files and directories to be graded
-files = root.xpath("//ul/li[contains(., 'File:')]/code")
-for f in files:
-    rgu.file_handle(f.text.strip())
+if only_readme is False:
+    # finds and makes all files and directories to be graded
+    files = root.xpath("//ul/li[contains(., 'File:')]/code")
+    for f in files:
+        rgu.file_handle(f.text.strip())
+        # chmod(f, 0o764)
 
-# get code snippets with files displayed by cat
-code_snippets = root.xpath("//pre/code[contains(., 'cat')]")
-for snippet in code_snippets:
-    rgu.snippet_handle(snippet.text)
+    # gets code snippets with files displayed by cat
+    code_snippets = root.xpath("//pre/code[contains(., 'cat')]")
+    for snippet in code_snippets:
+        rgu.snippet_handle(snippet.text)
 
-# make all the main files executable
-for f in glob.glob("*main.py"):
-    os.chmod(f, 0o764)
-
-rgu.generate_readme(sys.argv[1])
+rgu.generate_readme(argv[1])
